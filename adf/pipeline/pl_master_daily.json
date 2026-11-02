@@ -1,0 +1,297 @@
+{
+  "name": "pl_master_daily",
+  "properties": {
+    "description": "Daily orchestrator: runs all ingestion pipelines in parallel, triggers the Fabric transformation pipeline (notebooks bronze->silver->gold + warehouse load) through the Fabric REST job API, waits for it, and alerts the on-call channel on any failure.",
+    "parameters": {
+      "RunDate": {
+        "type": "string",
+        "defaultValue": "@utcNow()"
+      }
+    },
+    "variables": {
+      "FabricJobStatus": {
+        "type": "String",
+        "defaultValue": "NotStarted"
+      },
+      "FabricJobUrl": {
+        "type": "String"
+      }
+    },
+    "folder": {
+      "name": "orchestration"
+    },
+    "activities": [
+      {
+        "name": "Run_ErpIngestion",
+        "type": "ExecutePipeline",
+        "typeProperties": {
+          "pipeline": {
+            "referenceName": "pl_ingest_erp_incremental",
+            "type": "PipelineReference"
+          },
+          "waitOnCompletion": true,
+          "parameters": {
+            "RunDate": "@pipeline().parameters.RunDate"
+          }
+        }
+      },
+      {
+        "name": "Run_ScadaProduction",
+        "type": "ExecutePipeline",
+        "typeProperties": {
+          "pipeline": {
+            "referenceName": "pl_ingest_landing_files",
+            "type": "PipelineReference"
+          },
+          "waitOnCompletion": true,
+          "parameters": {
+            "LandingFolder": "scada/daily_production",
+            "SourceSystem": "scada",
+            "Entity": "daily_production"
+          }
+        }
+      },
+      {
+        "name": "Run_PumpTelemetry",
+        "type": "ExecutePipeline",
+        "typeProperties": {
+          "pipeline": {
+            "referenceName": "pl_ingest_landing_files",
+            "type": "PipelineReference"
+          },
+          "waitOnCompletion": true,
+          "parameters": {
+            "LandingFolder": "iot/pump_telemetry",
+            "SourceSystem": "iot",
+            "Entity": "pump_telemetry"
+          }
+        }
+      },
+      {
+        "name": "Run_EiaPrices",
+        "type": "ExecutePipeline",
+        "typeProperties": {
+          "pipeline": {
+            "referenceName": "pl_ingest_eia_prices",
+            "type": "PipelineReference"
+          },
+          "waitOnCompletion": true
+        }
+      },
+      {
+        "name": "Trigger_FabricTransform",
+        "type": "WebActivity",
+        "dependsOn": [
+          {
+            "activity": "Run_ErpIngestion",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          },
+          {
+            "activity": "Run_ScadaProduction",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          },
+          {
+            "activity": "Run_PumpTelemetry",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          },
+          {
+            "activity": "Run_EiaPrices",
+            "dependencyConditions": [
+              "Succeeded",
+              "Failed"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.00:05:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 60
+        },
+        "typeProperties": {
+          "method": "POST",
+          "url": {
+            "value": "https://api.fabric.microsoft.com/v1/workspaces/@{pipeline().globalParameters.FabricWorkspaceId}/items/@{pipeline().globalParameters.FabricTransformPipelineId}/jobs/instances?jobType=Pipeline",
+            "type": "Expression"
+          },
+          "body": {
+            "executionData": {
+              "parameters": {
+                "run_date": "@{formatDateTime(pipeline().parameters.RunDate,'yyyy-MM-dd')}"
+              }
+            }
+          },
+          "authentication": {
+            "type": "MSI",
+            "resource": "https://api.fabric.microsoft.com"
+          },
+          "turnOffAsync": true
+        }
+      },
+      {
+        "name": "Set_FabricJobUrl",
+        "type": "SetVariable",
+        "dependsOn": [
+          {
+            "activity": "Trigger_FabricTransform",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "variableName": "FabricJobUrl",
+          "value": {
+            "value": "@activity('Trigger_FabricTransform').output.ADFWebActivityResponseHeaders.Location",
+            "type": "Expression"
+          }
+        }
+      },
+      {
+        "name": "Until_FabricJobDone",
+        "type": "Until",
+        "dependsOn": [
+          {
+            "activity": "Set_FabricJobUrl",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@not(contains(createArray('NotStarted','InProgress'), variables('FabricJobStatus')))",
+            "type": "Expression"
+          },
+          "timeout": "0.03:00:00",
+          "activities": [
+            {
+              "name": "Wait_60s",
+              "type": "Wait",
+              "typeProperties": {
+                "waitTimeInSeconds": 60
+              }
+            },
+            {
+              "name": "Get_FabricJobStatus",
+              "type": "WebActivity",
+              "dependsOn": [
+                {
+                  "activity": "Wait_60s",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ],
+              "typeProperties": {
+                "method": "GET",
+                "url": {
+                  "value": "@variables('FabricJobUrl')",
+                  "type": "Expression"
+                },
+                "authentication": {
+                  "type": "MSI",
+                  "resource": "https://api.fabric.microsoft.com"
+                }
+              }
+            },
+            {
+              "name": "Set_FabricJobStatus",
+              "type": "SetVariable",
+              "dependsOn": [
+                {
+                  "activity": "Get_FabricJobStatus",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ],
+              "typeProperties": {
+                "variableName": "FabricJobStatus",
+                "value": {
+                  "value": "@activity('Get_FabricJobStatus').output.status",
+                  "type": "Expression"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "If_FabricJobFailed",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "Until_FabricJobDone",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@not(equals(variables('FabricJobStatus'), 'Completed'))",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "Fail_TransformStep",
+              "type": "Fail",
+              "typeProperties": {
+                "message": {
+                  "value": "@concat('Fabric transform job ended with status ', variables('FabricJobStatus'))",
+                  "type": "Expression"
+                },
+                "errorCode": "FABRIC_TRANSFORM_FAILED"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Alert_OnCall",
+        "type": "WebActivity",
+        "dependsOn": [
+          {
+            "activity": "If_FabricJobFailed",
+            "dependencyConditions": [
+              "Failed",
+              "Skipped"
+            ]
+          }
+        ],
+        "description": "Posts a failure card to the data-engineering Teams channel via a Logic App HTTP trigger.",
+        "typeProperties": {
+          "method": "POST",
+          "url": "@{pipeline().globalParameters.AlertLogicAppUrl}",
+          "body": {
+            "value": "@json(concat('{\"pipeline\":\"', pipeline().Pipeline, '\",\"runId\":\"', pipeline().RunId, '\",\"factory\":\"', pipeline().DataFactory, '\",\"severity\":\"P2\"}'))",
+            "type": "Expression"
+          }
+        }
+      },
+      {
+        "name": "Fail_MasterRun",
+        "type": "Fail",
+        "dependsOn": [
+          {
+            "activity": "Alert_OnCall",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "description": "Re-raise so the run shows as Failed in monitoring after the alert is sent.",
+        "typeProperties": {
+          "message": "Daily load failed - see pipeline_run_log and child runs",
+          "errorCode": "DAILY_LOAD_FAILED"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "ds_adls_landing_folder",
+  "properties": {
+    "description": "Folder-level dataset used by Get Metadata to list newly arrived files.",
+    "linkedServiceName": {
+      "referenceName": "ls_adls_landing",
+      "type": "LinkedServiceReference"
+    },
+    "parameters": {
+      "Folder": {
+        "type": "string"
+      }
+    },
+    "type": "Binary",
+    "typeProperties": {
+      "location": {
+        "type": "AzureBlobFSLocation",
+        "fileSystem": "landing",
+        "folderPath": {
+          "value": "@dataset().Folder",
+          "type": "Expression"
+        }
+      }
+    }
+  }
+}

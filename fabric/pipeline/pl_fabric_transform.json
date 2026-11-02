@@ -1,0 +1,210 @@
+{
+  "name": "pl_fabric_transform",
+  "properties": {
+    "description": "Fabric Data Factory pipeline (lives in the Fabric workspace). Triggered by ADF pl_master_daily through the Fabric job API. Runs bronze->silver->gold notebooks, loads the warehouse star schema, checks reconciliation, then refreshes the Power BI semantic model.",
+    "parameters": {
+      "run_date": {
+        "type": "string",
+        "defaultValue": "2026-10-29"
+      }
+    },
+    "activities": [
+      {
+        "name": "nb_01_bronze_to_silver",
+        "type": "TridentNotebook",
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 300
+        },
+        "typeProperties": {
+          "notebookId": "<nb_01-item-id>",
+          "workspaceId": "<fabric-workspace-id>",
+          "parameters": {
+            "run_date": {
+              "value": {
+                "value": "@pipeline().parameters.run_date",
+                "type": "Expression"
+              },
+              "type": "string"
+            },
+            "full_reload": {
+              "value": "false",
+              "type": "bool"
+            }
+          }
+        }
+      },
+      {
+        "name": "nb_02_silver_to_gold",
+        "type": "TridentNotebook",
+        "dependsOn": [
+          {
+            "activity": "nb_01_bronze_to_silver",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 300
+        },
+        "typeProperties": {
+          "notebookId": "<nb_02-item-id>",
+          "workspaceId": "<fabric-workspace-id>",
+          "parameters": {
+            "run_date": {
+              "value": {
+                "value": "@pipeline().parameters.run_date",
+                "type": "Expression"
+              },
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "Load_StarSchema",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          {
+            "activity": "nb_02_silver_to_gold",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 300
+        },
+        "linkedService": {
+          "name": "wh_permian_ops",
+          "properties": {
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "artifactId": "<warehouse-item-id>",
+              "endpoint": "<sql-endpoint>.datawarehouse.fabric.microsoft.com",
+              "workspaceId": "<fabric-workspace-id>"
+            }
+          }
+        },
+        "typeProperties": {
+          "storedProcedureName": "[dw].[usp_load_all]",
+          "storedProcedureParameters": {
+            "run_date": {
+              "value": {
+                "value": "@pipeline().parameters.run_date",
+                "type": "Expression"
+              },
+              "type": "DateTime"
+            },
+            "reprocess_days": {
+              "value": "15",
+              "type": "Int32"
+            },
+            "run_id": {
+              "value": {
+                "value": "@pipeline().RunId",
+                "type": "Expression"
+              },
+              "type": "String"
+            }
+          }
+        }
+      },
+      {
+        "name": "Check_Reconciliation",
+        "type": "Script",
+        "dependsOn": [
+          {
+            "activity": "Load_StarSchema",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 300
+        },
+        "linkedService": {
+          "name": "wh_permian_ops",
+          "properties": {
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "artifactId": "<warehouse-item-id>",
+              "endpoint": "<sql-endpoint>.datawarehouse.fabric.microsoft.com",
+              "workspaceId": "<fabric-workspace-id>"
+            }
+          }
+        },
+        "typeProperties": {
+          "scripts": [
+            {
+              "type": "Query",
+              "text": "SELECT COUNT(*) AS mismatches FROM dw.vw_reconciliation WHERE ABS(COALESCE(lakehouse_value,0) - COALESCE(warehouse_value,0)) > 0.01"
+            }
+          ]
+        }
+      },
+      {
+        "name": "If_ReconciliationFailed",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "Check_Reconciliation",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@greater(activity('Check_Reconciliation').output.resultSets[0].rows[0].mismatches, 0)",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "Fail_Reconciliation",
+              "type": "Fail",
+              "typeProperties": {
+                "message": "Warehouse totals do not match lakehouse gold - semantic model NOT refreshed. Query dw.vw_reconciliation.",
+                "errorCode": "RECON_MISMATCH"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Refresh_SemanticModel",
+        "type": "PBISemanticModelRefresh",
+        "dependsOn": [
+          {
+            "activity": "If_ReconciliationFailed",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 300
+        },
+        "typeProperties": {
+          "method": "post",
+          "groupId": "<fabric-workspace-id>",
+          "datasetId": "<semantic-model-id>",
+          "commitMode": "Transactional",
+          "waitOnCompletion": true,
+          "operationType": "SemanticModelRefresh"
+        }
+      }
+    ]
+  }
+}

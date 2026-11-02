@@ -1,0 +1,12 @@
+{
+  "name": "ls_rest_eia",
+  "properties": {
+    "description": "U.S. EIA Open Data API v2 - daily WTI crude and Henry Hub gas spot prices for revenue estimates.",
+    "type": "RestService",
+    "typeProperties": {
+      "url": "https://api.eia.gov/v2/",
+      "enableServerCertificateValidation": true,
+      "authenticationType": "Anonymous"
+    }
+  }
+}

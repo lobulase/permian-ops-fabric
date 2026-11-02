@@ -1,0 +1,14 @@
+{
+  "name": "ls_adls_landing",
+  "properties": {
+    "description": "ADLS Gen2 landing zone where SCADA historian exports and IoT telemetry files are dropped.",
+    "type": "AzureBlobFS",
+    "typeProperties": {
+      "url": "https://<yourstorageacct>.dfs.core.windows.net/"
+    },
+    "connectVia": {
+      "referenceName": "AutoResolveIntegrationRuntime",
+      "type": "IntegrationRuntimeReference"
+    }
+  }
+}

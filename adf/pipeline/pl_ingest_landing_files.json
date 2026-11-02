@@ -1,0 +1,315 @@
+{
+  "name": "pl_ingest_landing_files",
+  "properties": {
+    "description": "Reusable file ingestion: lists new CSVs in an ADLS landing folder, copies each to Lakehouse Files/bronze/<source>/<entity>/ingest_date=..., then archives the original. Used for SCADA daily production and IoT pump telemetry.",
+    "parameters": {
+      "LandingFolder": {
+        "type": "string",
+        "defaultValue": "scada/daily_production"
+      },
+      "SourceSystem": {
+        "type": "string",
+        "defaultValue": "scada"
+      },
+      "Entity": {
+        "type": "string",
+        "defaultValue": "daily_production"
+      }
+    },
+    "folder": {
+      "name": "ingestion"
+    },
+    "activities": [
+      {
+        "name": "Get_LandingFiles",
+        "type": "GetMetadata",
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 120,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "dataset": {
+            "referenceName": "ds_adls_landing_folder",
+            "type": "DatasetReference",
+            "parameters": {
+              "Folder": "@pipeline().parameters.LandingFolder"
+            }
+          },
+          "fieldList": [
+            "childItems"
+          ],
+          "storeSettings": {
+            "type": "AzureBlobFSReadSettings",
+            "recursive": false
+          }
+        }
+      },
+      {
+        "name": "Filter_CsvFiles",
+        "type": "Filter",
+        "dependsOn": [
+          {
+            "activity": "Get_LandingFiles",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@activity('Get_LandingFiles').output.childItems",
+            "type": "Expression"
+          },
+          "condition": {
+            "value": "@and(equals(item().type, 'File'), endswith(toLower(item().name), '.csv'))",
+            "type": "Expression"
+          }
+        }
+      },
+      {
+        "name": "If_NoFiles",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "Filter_CsvFiles",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@equals(activity('Filter_CsvFiles').output.FilteredItemsCount, 0)",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "Log_NoFilesArrived",
+              "type": "Script",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 1
+              },
+              "linkedServiceName": {
+                "referenceName": "ls_fabric_warehouse",
+                "type": "LinkedServiceReference"
+              },
+              "typeProperties": {
+                "scripts": [
+                  {
+                    "type": "NonQuery",
+                    "text": {
+                      "type": "Expression",
+                      "value": "@concat('EXEC etl.usp_log_pipeline_run ','@pipeline_name=''', pipeline().Pipeline, ''', ','@run_id=''', pipeline().RunId, ''', ','@entity_name=''', pipeline().parameters.Entity, ''', ','@status=''NoData'', ','@rows_copied=', string(0), ', ','@error_message=''', replace('No new files in landing folder - check upstream export', '''', ''''''), '''')"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "ForEach_NewFile",
+        "type": "ForEach",
+        "dependsOn": [
+          {
+            "activity": "Filter_CsvFiles",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@activity('Filter_CsvFiles').output.value",
+            "type": "Expression"
+          },
+          "isSequential": false,
+          "batchCount": 8,
+          "activities": [
+            {
+              "name": "Copy_FileToBronze",
+              "type": "Copy",
+              "policy": {
+                "timeout": "0.02:00:00",
+                "retry": 2,
+                "retryIntervalInSeconds": 120,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "source": {
+                  "type": "DelimitedTextSource",
+                  "storeSettings": {
+                    "type": "AzureBlobFSReadSettings",
+                    "recursive": false
+                  },
+                  "formatSettings": {
+                    "type": "DelimitedTextReadSettings"
+                  }
+                },
+                "sink": {
+                  "type": "DelimitedTextSink",
+                  "storeSettings": {
+                    "type": "LakehouseWriteSettings"
+                  },
+                  "formatSettings": {
+                    "type": "DelimitedTextWriteSettings",
+                    "fileExtension": ".csv",
+                    "quoteAllText": false
+                  }
+                },
+                "validateDataConsistency": true
+              },
+              "inputs": [
+                {
+                  "referenceName": "ds_adls_landing_csv",
+                  "type": "DatasetReference",
+                  "parameters": {
+                    "Folder": "@pipeline().parameters.LandingFolder",
+                    "FileName": "@item().name"
+                  }
+                }
+              ],
+              "outputs": [
+                {
+                  "referenceName": "ds_lakehouse_bronze_csv",
+                  "type": "DatasetReference",
+                  "parameters": {
+                    "Source": "@pipeline().parameters.SourceSystem",
+                    "Entity": "@pipeline().parameters.Entity",
+                    "IngestDate": "@formatDateTime(utcNow(), 'yyyy-MM-dd')",
+                    "FileName": "@item().name"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Archive_ProcessedFile",
+              "type": "Copy",
+              "dependsOn": [
+                {
+                  "activity": "Copy_FileToBronze",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ],
+              "policy": {
+                "timeout": "0.02:00:00",
+                "retry": 2,
+                "retryIntervalInSeconds": 120,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "source": {
+                  "type": "BinarySource",
+                  "storeSettings": {
+                    "type": "AzureBlobFSReadSettings",
+                    "deleteFilesAfterCompletion": true,
+                    "wildcardFileName": {
+                      "value": "@item().name",
+                      "type": "Expression"
+                    }
+                  }
+                },
+                "sink": {
+                  "type": "BinarySink",
+                  "storeSettings": {
+                    "type": "AzureBlobFSWriteSettings"
+                  }
+                }
+              },
+              "inputs": [
+                {
+                  "referenceName": "ds_adls_landing_folder",
+                  "type": "DatasetReference",
+                  "parameters": {
+                    "Folder": "@pipeline().parameters.LandingFolder"
+                  }
+                }
+              ],
+              "outputs": [
+                {
+                  "referenceName": "ds_adls_landing_folder",
+                  "type": "DatasetReference",
+                  "parameters": {
+                    "Folder": "@concat('archive/', pipeline().parameters.LandingFolder, '/', formatDateTime(utcNow(), 'yyyy/MM/dd'))"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Log_FileSuccess",
+              "type": "Script",
+              "dependsOn": [
+                {
+                  "activity": "Copy_FileToBronze",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 1
+              },
+              "linkedServiceName": {
+                "referenceName": "ls_fabric_warehouse",
+                "type": "LinkedServiceReference"
+              },
+              "typeProperties": {
+                "scripts": [
+                  {
+                    "type": "NonQuery",
+                    "text": {
+                      "type": "Expression",
+                      "value": "@concat('EXEC etl.usp_log_pipeline_run ','@pipeline_name=''', pipeline().Pipeline, ''', ','@run_id=''', pipeline().RunId, ''', ','@entity_name=''', item().name, ''', ','@status=''Succeeded'', ','@rows_copied=', string(activity('Copy_FileToBronze').output.rowsCopied), ', ','@error_message=''', replace('', '''', ''''''), '''')"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Log_FileFailure",
+              "type": "Script",
+              "dependsOn": [
+                {
+                  "activity": "Copy_FileToBronze",
+                  "dependencyConditions": [
+                    "Failed"
+                  ]
+                }
+              ],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 1
+              },
+              "linkedServiceName": {
+                "referenceName": "ls_fabric_warehouse",
+                "type": "LinkedServiceReference"
+              },
+              "typeProperties": {
+                "scripts": [
+                  {
+                    "type": "NonQuery",
+                    "text": {
+                      "type": "Expression",
+                      "value": "@concat('EXEC etl.usp_log_pipeline_run ','@pipeline_name=''', pipeline().Pipeline, ''', ','@run_id=''', pipeline().RunId, ''', ','@entity_name=''', item().name, ''', ','@status=''Failed'', ','@rows_copied=', string(0), ', ','@error_message=''', replace(activity('Copy_FileToBronze').error.message, '''', ''''''), '''')"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

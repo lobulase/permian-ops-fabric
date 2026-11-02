@@ -1,0 +1,29 @@
+{
+  "name": "ls_sqlserver_erp",
+  "properties": {
+    "description": "On-prem ERP / CMMS SQL Server (work orders, parts inventory, well & asset master). Reached through a self-hosted IR.",
+    "type": "SqlServer",
+    "parameters": {
+      "DatabaseName": {
+        "type": "String",
+        "defaultValue": "ERP_Ops"
+      }
+    },
+    "typeProperties": {
+      "connectionString": "Data Source=<erp-sql-host>;Initial Catalog=@{linkedService().DatabaseName};Integrated Security=False;Encrypt=True;TrustServerCertificate=True;",
+      "userName": "svc_adf_reader",
+      "password": {
+        "type": "AzureKeyVaultSecret",
+        "store": {
+          "type": "LinkedServiceReference",
+          "referenceName": "ls_keyvault"
+        },
+        "secretName": "erp-sql-password"
+      }
+    },
+    "connectVia": {
+      "referenceName": "shir-houston-ops",
+      "type": "IntegrationRuntimeReference"
+    }
+  }
+}

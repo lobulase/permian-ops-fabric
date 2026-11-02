@@ -1,0 +1,237 @@
+{
+  "name": "pl_ingest_erp_incremental",
+  "properties": {
+    "description": "Metadata-driven incremental extract of ERP/CMMS tables (wells, equipment, work orders, parts inventory) into Lakehouse bronze as Parquet. Watermarks live in etl.ingestion_control in the Fabric Warehouse.",
+    "parameters": {
+      "RunDate": {
+        "type": "string",
+        "defaultValue": "@utcNow()"
+      }
+    },
+    "folder": {
+      "name": "ingestion"
+    },
+    "activities": [
+      {
+        "name": "Lookup_ActiveErpEntities",
+        "type": "Lookup",
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 120,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "WarehouseSource",
+            "sqlReaderQuery": "SELECT entity_name, source_schema, source_table, load_type, watermark_column, CONVERT(varchar(30), last_watermark, 126) AS last_watermark FROM etl.ingestion_control WHERE source_system = 'ERP' AND is_active = 1"
+          },
+          "dataset": {
+            "referenceName": "ds_fabric_wh_generic",
+            "type": "DatasetReference"
+          },
+          "firstRowOnly": false
+        }
+      },
+      {
+        "name": "ForEach_ErpEntity",
+        "type": "ForEach",
+        "dependsOn": [
+          {
+            "activity": "Lookup_ActiveErpEntities",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@activity('Lookup_ActiveErpEntities').output.value",
+            "type": "Expression"
+          },
+          "isSequential": false,
+          "batchCount": 4,
+          "activities": [
+            {
+              "name": "Lookup_NewWatermark",
+              "type": "Lookup",
+              "policy": {
+                "timeout": "0.02:00:00",
+                "retry": 2,
+                "retryIntervalInSeconds": 120,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "source": {
+                  "type": "SqlServerSource",
+                  "sqlReaderQuery": {
+                    "type": "Expression",
+                    "value": "@concat('SELECT CONVERT(varchar(30), MAX(', item().watermark_column, '), 126) AS new_watermark FROM ', item().source_schema, '.', item().source_table)"
+                  }
+                },
+                "dataset": {
+                  "referenceName": "ds_erp_sql_query",
+                  "type": "DatasetReference"
+                },
+                "firstRowOnly": true
+              }
+            },
+            {
+              "name": "Copy_ErpToBronze",
+              "type": "Copy",
+              "dependsOn": [
+                {
+                  "activity": "Lookup_NewWatermark",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ],
+              "policy": {
+                "timeout": "0.02:00:00",
+                "retry": 2,
+                "retryIntervalInSeconds": 120,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "source": {
+                  "type": "SqlServerSource",
+                  "queryTimeout": "02:00:00",
+                  "sqlReaderQuery": {
+                    "type": "Expression",
+                    "value": "@if(equals(item().load_type,'FULL'), concat('SELECT *, GETUTCDATE() AS _extracted_at FROM ', item().source_schema, '.', item().source_table), concat('SELECT *, GETUTCDATE() AS _extracted_at FROM ', item().source_schema, '.', item().source_table, ' WHERE ', item().watermark_column, ' > ''', item().last_watermark, ''' AND ', item().watermark_column, ' <= ''', activity('Lookup_NewWatermark').output.firstRow.new_watermark, ''''))"
+                  }
+                },
+                "sink": {
+                  "type": "ParquetSink",
+                  "storeSettings": {
+                    "type": "LakehouseWriteSettings"
+                  }
+                },
+                "enableStaging": false,
+                "translator": {
+                  "type": "TabularTranslator",
+                  "typeConversion": true
+                }
+              },
+              "inputs": [
+                {
+                  "referenceName": "ds_erp_sql_query",
+                  "type": "DatasetReference"
+                }
+              ],
+              "outputs": [
+                {
+                  "referenceName": "ds_lakehouse_bronze_parquet",
+                  "type": "DatasetReference",
+                  "parameters": {
+                    "Source": "erp",
+                    "Entity": "@item().entity_name",
+                    "IngestDate": "@formatDateTime(pipeline().parameters.RunDate, 'yyyy-MM-dd')",
+                    "FileName": "@concat(item().entity_name, '_', pipeline().RunId, '.parquet')"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Update_Watermark",
+              "type": "Script",
+              "dependsOn": [
+                {
+                  "activity": "Copy_ErpToBronze",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ],
+              "linkedServiceName": {
+                "referenceName": "ls_fabric_warehouse",
+                "type": "LinkedServiceReference"
+              },
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 1
+              },
+              "typeProperties": {
+                "scripts": [
+                  {
+                    "type": "NonQuery",
+                    "text": {
+                      "type": "Expression",
+                      "value": "@concat('EXEC etl.usp_update_watermark @entity_name=''', item().entity_name, ''', @new_watermark=''', coalesce(activity('Lookup_NewWatermark').output.firstRow.new_watermark, item().last_watermark), '''')"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Log_Success",
+              "type": "Script",
+              "dependsOn": [
+                {
+                  "activity": "Update_Watermark",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 1
+              },
+              "linkedServiceName": {
+                "referenceName": "ls_fabric_warehouse",
+                "type": "LinkedServiceReference"
+              },
+              "typeProperties": {
+                "scripts": [
+                  {
+                    "type": "NonQuery",
+                    "text": {
+                      "type": "Expression",
+                      "value": "@concat('EXEC etl.usp_log_pipeline_run ','@pipeline_name=''', pipeline().Pipeline, ''', ','@run_id=''', pipeline().RunId, ''', ','@entity_name=''', item().entity_name, ''', ','@status=''Succeeded'', ','@rows_copied=', string(activity('Copy_ErpToBronze').output.rowsCopied), ', ','@error_message=''', replace('', '''', ''''''), '''')"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Log_Failure",
+              "type": "Script",
+              "dependsOn": [
+                {
+                  "activity": "Copy_ErpToBronze",
+                  "dependencyConditions": [
+                    "Failed"
+                  ]
+                }
+              ],
+              "policy": {
+                "timeout": "0.00:10:00",
+                "retry": 1
+              },
+              "linkedServiceName": {
+                "referenceName": "ls_fabric_warehouse",
+                "type": "LinkedServiceReference"
+              },
+              "typeProperties": {
+                "scripts": [
+                  {
+                    "type": "NonQuery",
+                    "text": {
+                      "type": "Expression",
+                      "value": "@concat('EXEC etl.usp_log_pipeline_run ','@pipeline_name=''', pipeline().Pipeline, ''', ','@run_id=''', pipeline().RunId, ''', ','@entity_name=''', item().entity_name, ''', ','@status=''Failed'', ','@rows_copied=', string(0), ', ','@error_message=''', replace(activity('Copy_ErpToBronze').error.message, '''', ''''''), '''')"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

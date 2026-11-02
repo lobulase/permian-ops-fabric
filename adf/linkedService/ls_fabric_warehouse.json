@@ -1,0 +1,23 @@
+{
+  "name": "ls_fabric_warehouse",
+  "properties": {
+    "description": "Microsoft Fabric Warehouse 'wh_permian_ops' - used here for ETL control/watermark and audit tables.",
+    "type": "Warehouse",
+    "typeProperties": {
+      "endpoint": "<sql-endpoint>.datawarehouse.fabric.microsoft.com",
+      "workspaceId": "<fabric-workspace-id>",
+      "artifactId": "<warehouse-item-id>",
+      "tenant": "<tenant-id>",
+      "servicePrincipalId": "<spn-client-id>",
+      "servicePrincipalCredentialType": "ServicePrincipalKey",
+      "servicePrincipalCredential": {
+        "type": "AzureKeyVaultSecret",
+        "store": {
+          "type": "LinkedServiceReference",
+          "referenceName": "ls_keyvault"
+        },
+        "secretName": "fabric-spn-secret"
+      }
+    }
+  }
+}

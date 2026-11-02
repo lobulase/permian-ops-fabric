@@ -1,0 +1,40 @@
+{
+  "name": "ds_lakehouse_bronze_csv",
+  "properties": {
+    "linkedServiceName": {
+      "referenceName": "ls_fabric_lakehouse",
+      "type": "LinkedServiceReference"
+    },
+    "parameters": {
+      "Source": {
+        "type": "string"
+      },
+      "Entity": {
+        "type": "string"
+      },
+      "IngestDate": {
+        "type": "string"
+      },
+      "FileName": {
+        "type": "string"
+      }
+    },
+    "type": "DelimitedText",
+    "typeProperties": {
+      "location": {
+        "type": "LakehouseLocation",
+        "folderPath": {
+          "value": "@concat('bronze/', dataset().Source, '/', dataset().Entity, '/ingest_date=', dataset().IngestDate)",
+          "type": "Expression"
+        },
+        "fileName": {
+          "value": "@dataset().FileName",
+          "type": "Expression"
+        }
+      },
+      "columnDelimiter": ",",
+      "firstRowAsHeader": true,
+      "quoteChar": "\""
+    }
+  }
+}

@@ -1,0 +1,5 @@
+pandas>=2.0
+numpy>=1.26
+pyspark==3.5.3
+pytest>=8
+pyodbc>=5  # only for scripts/load_erp_source.py

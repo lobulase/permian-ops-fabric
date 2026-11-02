@@ -1,0 +1,35 @@
+{
+  "name": "tr_daily_0530_ct",
+  "properties": {
+    "description": "Runs the master pipeline every day at 05:30 Central, after the SCADA historian's 05:00 export.",
+    "runtimeState": "Stopped",
+    "pipelines": [
+      {
+        "pipelineReference": {
+          "referenceName": "pl_master_daily",
+          "type": "PipelineReference"
+        },
+        "parameters": {
+          "RunDate": "@trigger().scheduledTime"
+        }
+      }
+    ],
+    "type": "ScheduleTrigger",
+    "typeProperties": {
+      "recurrence": {
+        "frequency": "Day",
+        "interval": 1,
+        "startTime": "2026-11-02T05:30:00",
+        "timeZone": "Central Standard Time",
+        "schedule": {
+          "hours": [
+            5
+          ],
+          "minutes": [
+            30
+          ]
+        }
+      }
+    }
+  }
+}

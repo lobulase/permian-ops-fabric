@@ -1,0 +1,109 @@
+{
+  "name": "pl_ingest_eia_prices",
+  "properties": {
+    "description": "Pulls daily WTI (RWTC) crude and Henry Hub (RNGWHHD) gas spot prices from the EIA v2 API into bronze JSON.",
+    "parameters": {
+      "LookbackDays": {
+        "type": "int",
+        "defaultValue": 14
+      }
+    },
+    "folder": {
+      "name": "ingestion"
+    },
+    "activities": [
+      {
+        "name": "Get_EiaApiKey",
+        "type": "WebActivity",
+        "policy": {
+          "timeout": "0.00:05:00",
+          "retry": 2,
+          "secureOutput": true
+        },
+        "typeProperties": {
+          "method": "GET",
+          "url": "https://<your-keyvault>.vault.azure.net/secrets/eia-api-key?api-version=7.4",
+          "authentication": {
+            "type": "MSI",
+            "resource": "https://vault.azure.net"
+          }
+        }
+      },
+      {
+        "name": "ForEach_Series",
+        "type": "ForEach",
+        "dependsOn": [
+          {
+            "activity": "Get_EiaApiKey",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@createArray(json('{\"series\":\"RWTC\",\"route\":\"petroleum/pri/spt\"}'), json('{\"series\":\"RNGWHHD\",\"route\":\"natural-gas/pri/fut\"}'))",
+            "type": "Expression"
+          },
+          "isSequential": true,
+          "activities": [
+            {
+              "name": "Copy_EiaSeries",
+              "type": "Copy",
+              "policy": {
+                "timeout": "0.02:00:00",
+                "retry": 2,
+                "retryIntervalInSeconds": 120,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "source": {
+                  "type": "RestSource",
+                  "requestMethod": "GET",
+                  "httpRequestTimeout": "00:02:00",
+                  "requestInterval": "00.00:00:01.000",
+                  "paginationRules": {
+                    "QueryParameters.offset": "RANGE:0::5000"
+                  }
+                },
+                "sink": {
+                  "type": "JsonSink",
+                  "storeSettings": {
+                    "type": "LakehouseWriteSettings"
+                  },
+                  "formatSettings": {
+                    "type": "JsonWriteSettings",
+                    "filePattern": "setOfObjects"
+                  }
+                }
+              },
+              "inputs": [
+                {
+                  "referenceName": "ds_eia_rest",
+                  "type": "DatasetReference",
+                  "parameters": {
+                    "RelativeUrl": {
+                      "type": "Expression",
+                      "value": "@concat(item().route, '/data/?api_key=', activity('Get_EiaApiKey').output.value, '&frequency=daily&data[0]=value&facets[series][]=', item().series, '&start=', formatDateTime(addDays(utcNow(), mul(-1, pipeline().parameters.LookbackDays)), 'yyyy-MM-dd'), '&sort[0][column]=period&sort[0][direction]=asc&length=5000')"
+                    }
+                  }
+                }
+              ],
+              "outputs": [
+                {
+                  "referenceName": "ds_lakehouse_bronze_json",
+                  "type": "DatasetReference",
+                  "parameters": {
+                    "IngestDate": "@formatDateTime(utcNow(), 'yyyy-MM-dd')",
+                    "FileName": "@concat(item().series, '.json')"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "ds_lakehouse_bronze_parquet",
+  "properties": {
+    "linkedServiceName": {
+      "referenceName": "ls_fabric_lakehouse",
+      "type": "LinkedServiceReference"
+    },
+    "parameters": {
+      "Source": {
+        "type": "string"
+      },
+      "Entity": {
+        "type": "string"
+      },
+      "IngestDate": {
+        "type": "string"
+      },
+      "FileName": {
+        "type": "string"
+      }
+    },
+    "type": "Parquet",
+    "typeProperties": {
+      "location": {
+        "type": "LakehouseLocation",
+        "folderPath": {
+          "value": "@concat('bronze/', dataset().Source, '/', dataset().Entity, '/ingest_date=', dataset().IngestDate)",
+          "type": "Expression"
+        },
+        "fileName": {
+          "value": "@dataset().FileName",
+          "type": "Expression"
+        }
+      },
+      "compressionCodec": "snappy"
+    }
+  }
+}

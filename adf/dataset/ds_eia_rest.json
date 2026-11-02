@@ -1,0 +1,21 @@
+{
+  "name": "ds_eia_rest",
+  "properties": {
+    "linkedServiceName": {
+      "referenceName": "ls_rest_eia",
+      "type": "LinkedServiceReference"
+    },
+    "parameters": {
+      "RelativeUrl": {
+        "type": "string"
+      }
+    },
+    "type": "RestResource",
+    "typeProperties": {
+      "relativeUrl": {
+        "value": "@dataset().RelativeUrl",
+        "type": "Expression"
+      }
+    }
+  }
+}

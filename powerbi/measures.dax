@@ -1,0 +1,124 @@
+// =====================================================================
+//  sm_permian_ops  —  DAX measures (home table: _Measures)
+//  Paste into Tabular Editor or the Fabric web model view.
+// =====================================================================
+
+// ---------- Production ----------
+Oil (bbl) = SUM ( fact_production_daily[oil_bbl] )
+Gas (mcf) = SUM ( fact_production_daily[gas_mcf] )
+Water (bbl) = SUM ( fact_production_daily[water_bbl] )
+BOE = SUM ( fact_production_daily[boe] )
+
+Oil Rate (bbl/d) =
+DIVIDE ( [Oil (bbl)], DISTINCTCOUNT ( fact_production_daily[date_key] ) )
+
+Water Cut % =
+DIVIDE ( [Water (bbl)], [Oil (bbl)] + [Water (bbl)] )
+
+Uptime % =
+DIVIDE (
+    SUM ( fact_production_daily[uptime_hours] ),
+    COUNTROWS ( fact_production_daily ) * 24
+)
+
+Producing Wells =
+CALCULATE (
+    DISTINCTCOUNT ( fact_production_daily[well_key] ),
+    fact_production_daily[oil_bbl] > 0
+)
+
+// ---------- Time intelligence ----------
+BOE MTD = TOTALMTD ( [BOE], dim_date[date] )
+BOE YTD = TOTALYTD ( [BOE], dim_date[date] )
+BOE Prior Month = CALCULATE ( [BOE], DATEADD ( dim_date[date], -1, MONTH ) )
+BOE MoM % = DIVIDE ( [BOE] - [BOE Prior Month], [BOE Prior Month] )
+
+BOE 7-Day Avg =
+AVERAGEX (
+    DATESINPERIOD ( dim_date[date], MAX ( dim_date[date] ), -7, DAY ),
+    [BOE]
+)
+
+// ---------- Deferment & revenue ----------
+Deferred Oil (bbl) = SUM ( fact_production_daily[deferred_oil_bbl] )
+Est. Revenue ($) = SUM ( fact_production_daily[est_revenue_usd] )
+Deferred Revenue ($) = SUM ( fact_production_daily[deferred_revenue_usd] )
+
+Deferment % =
+DIVIDE ( [Deferred Oil (bbl)], [Oil (bbl)] + [Deferred Oil (bbl)] )
+
+Avg WTI ($/bbl) = AVERAGE ( fact_production_daily[wti_usd_bbl] )
+
+// Top-N wells by deferred revenue (use with a "Top N" what-if parameter)
+Deferred Revenue Rank =
+IF (
+    ISINSCOPE ( dim_well[well_name] ),
+    RANKX ( ALLSELECTED ( dim_well[well_name] ), [Deferred Revenue ($)], , DESC, DENSE )
+)
+
+// ---------- Reliability ----------
+Failures =
+CALCULATE ( COUNTROWS ( fact_work_order ), fact_work_order[wo_type] = "Corrective" )
+
+Pump Days = COUNTROWS ( fact_equipment_health_daily )
+
+MTBF (days) = DIVIDE ( [Pump Days], [Failures] )
+
+MTTR (hrs) =
+CALCULATE ( AVERAGE ( fact_work_order[downtime_hours] ), fact_work_order[wo_type] = "Corrective" )
+
+Maintenance Cost ($) = SUM ( fact_work_order[total_cost] )
+Cost per Failure ($) =
+DIVIDE ( CALCULATE ( [Maintenance Cost ($)], fact_work_order[wo_type] = "Corrective" ), [Failures] )
+
+// Work orders closed in the period (uses the inactive closed-date relationship)
+WOs Closed =
+CALCULATE (
+    COUNTROWS ( fact_work_order ),
+    USERELATIONSHIP ( fact_work_order[closed_date_key], dim_date[date_key] )
+)
+
+Preventive Mix % =
+DIVIDE (
+    CALCULATE ( COUNTROWS ( fact_work_order ), fact_work_order[wo_type] = "Preventive" ),
+    COUNTROWS ( fact_work_order )
+)
+
+// ---------- Pump health ----------
+Pumps on Watchlist =
+CALCULATE (
+    DISTINCTCOUNT ( fact_equipment_health_daily[equipment_key] ),
+    fact_equipment_health_daily[health_status] IN { "Watch", "Critical" },
+    LASTDATE ( dim_date[date] )
+)
+
+// How often a Critical flag was followed by a failure within 7 days (model precision)
+Critical Flag Precision % =
+DIVIDE (
+    CALCULATE ( COUNTROWS ( fact_equipment_health_daily ),
+                fact_equipment_health_daily[health_status] = "Critical",
+                fact_equipment_health_daily[failed_within_7d] = TRUE () ),
+    CALCULATE ( COUNTROWS ( fact_equipment_health_daily ),
+                fact_equipment_health_daily[health_status] = "Critical" )
+)
+
+// ---------- Inventory (semi-additive: last snapshot in context) ----------
+Qty On Hand =
+CALCULATE (
+    SUM ( fact_inventory_snapshot[qty_on_hand] ),
+    LASTNONBLANK ( dim_date[date], CALCULATE ( COUNTROWS ( fact_inventory_snapshot ) ) )
+)
+
+Inventory Value ($) =
+CALCULATE (
+    SUM ( fact_inventory_snapshot[inventory_value_usd] ),
+    LASTNONBLANK ( dim_date[date], CALCULATE ( COUNTROWS ( fact_inventory_snapshot ) ) )
+)
+
+Parts Below Reorder =
+CALCULATE (
+    COUNTROWS ( fact_inventory_snapshot ),
+    fact_inventory_snapshot[reorder_flag] = TRUE (),
+    LASTNONBLANK ( dim_date[date], CALCULATE ( COUNTROWS ( fact_inventory_snapshot ) ) )
+)
+

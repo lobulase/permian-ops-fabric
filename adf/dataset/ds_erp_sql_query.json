@@ -1,0 +1,12 @@
+{
+  "name": "ds_erp_sql_query",
+  "properties": {
+    "description": "Generic ERP source; the query is supplied by the Copy activity.",
+    "linkedServiceName": {
+      "referenceName": "ls_sqlserver_erp",
+      "type": "LinkedServiceReference"
+    },
+    "type": "SqlServerTable",
+    "typeProperties": {}
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "ds_fabric_wh_generic",
+  "properties": {
+    "linkedServiceName": {
+      "referenceName": "ls_fabric_warehouse",
+      "type": "LinkedServiceReference"
+    },
+    "type": "WarehouseTable",
+    "typeProperties": {
+      "schema": "etl",
+      "table": "ingestion_control"
+    }
+  }
+}
