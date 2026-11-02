@@ -49,6 +49,10 @@ flowchart LR
 - **Verified end to end.** The silver row counts from the ADF-sourced bronze match the hand-loaded run exactly (7,272 production rows read and 33 quarantined; 155,520 telemetry rows read and 360 quarantined). Warehouse reconciliation: lakehouse = warehouse on oil volume (1,181,358.04 bbl) and row count (7,168), with 0 rows mapped to the unknown well.
 
 ### Screenshots
+**ADF: `pl_master_daily` runs both ingestion pipelines**
+![ADF master pipeline](docs/screenshots/adf_master_pipeline.png)
+
+**ADF: monitor, all three pipelines succeeded**
 
 **ADF: master pipeline run (ERP + file ingestion)**
 ![ADF monitor](docs/screenshots/adf_monitor.png)
